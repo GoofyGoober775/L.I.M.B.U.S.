@@ -1,0 +1,699 @@
+limbus-game/
+├── index.html
+├── game.js
+├── README.md
+└── assets/
+    ├── echo_normal.png
+    ├── echo_spider.png
+    ├── hospital_tileset.png
+    └── sounds/
+        ├── heartbeat.mp3
+        ├── whisper.mp3
+        └── hospital_ambience.mp3
+// LIMBUS: The Nightmare Strider - Core Game Prototype
+// Using Phaser 3 for game development
+
+import Phaser from 'phaser';
+
+// Game configuration
+const config = {
+  type: Phaser.AUTO,
+  width: 800,
+  height: 600,
+  physics: {
+    default: 'arcade',
+    arcade: {
+      gravity: { y: 300 },
+      debug: false
+    }
+  },
+  scene: {
+    preload: preload,
+    create: create,
+    update: update
+  }
+};
+
+// Initialize the game
+const game = new Phaser.Game(config);
+
+// Global variables
+let player;
+let platforms;
+let cursors;
+let fractures = [];
+let enemies = [];
+let dreadMeter = 0;
+let currentPhobia = 'normal'; // Default form
+let phobiaButton;
+let phobiaCooldown = false;
+let backgroundMusic;
+let heartbeatSound;
+let whisperSound;
+let phobiaSounds = {};
+let gameState = {
+  sanity: 100,
+  fracturesOpen: 0
+};
+
+// Asset loading
+function preload() {
+  // Character sprites for different phobia forms
+  this.load.spritesheet('echo_normal', 'assets/echo_normal.png', { frameWidth: 32, frameHeight: 48 });
+  this.load.spritesheet('echo_arachnophobia', 'assets/echo_spider.png', { frameWidth: 48, frameHeight: 32 });
+  this.load.spritesheet('echo_acrophobia', 'assets/echo_height.png', { frameWidth: 32, frameHeight: 48 });
+  this.load.spritesheet('echo_claustrophobia', 'assets/echo_small.png', { frameWidth: 24, frameHeight: 24 });
+  this.load.spritesheet('echo_nyctophobia', 'assets/echo_dark.png', { frameWidth: 32, frameHeight: 48 });
+  
+  // Environment assets
+  this.load.image('hospital_tiles', 'assets/hospital_tileset.png');
+  this.load.image('memory_fracture', 'assets/memory_fracture.png');
+  this.load.image('background', 'assets/ward13_background.png');
+  
+  // Enemies
+  this.load.spritesheet('nurse', 'assets/nurse_enemy.png', { frameWidth: 32, frameHeight: 64 });
+  this.load.spritesheet('memory_leech', 'assets/memory_leech.png', { frameWidth: 24, frameHeight: 24 });
+  
+  // UI elements
+  this.load.image('dread_meter', 'assets/dread_meter.png');
+  this.load.image('phobia_button', 'assets/phobia_button.png');
+  
+  // Audio
+  this.load.audio('background_ambience', 'assets/sounds/hospital_ambience.mp3');
+  this.load.audio('heartbeat', 'assets/sounds/heartbeat.mp3');
+  this.load.audio('whisper', 'assets/sounds/whisper.mp3');
+  this.load.audio('fracture_open', 'assets/sounds/fracture_open.mp3');
+  this.load.audio('form_change', 'assets/sounds/form_change.mp3');
+}
+
+function create() {
+  // Add background
+  this.add.image(400, 300, 'background').setScrollFactor(0.2);
+  
+  // Add a particle effect for the environment distortion
+  const particles = this.add.particles('memory_fracture');
+  const emitter = particles.createEmitter({
+    x: 400,
+    y: 300,
+    speed: 20,
+    scale: { start: 0.1, end: 0 },
+    blendMode: 'ADD',
+    frequency: 500,
+    lifespan: 2000
+  });
+  
+  // Create the ground and platforms
+  platforms = this.physics.add.staticGroup();
+  platforms.create(400, 580, 'hospital_tiles').setScale(2).refreshBody(); // Ground
+  
+  // Add some platforms
+  platforms.create(600, 450, 'hospital_tiles');
+  platforms.create(50, 350, 'hospital_tiles');
+  platforms.create(550, 250, 'hospital_tiles');
+  platforms.create(300, 200, 'hospital_tiles');
+  
+  // Create player character
+  player = this.physics.add.sprite(100, 450, 'echo_normal');
+  player.setBounce(0.1);
+  player.setCollideWorldBounds(true);
+  player.phobia = 'normal';
+  
+  // Set up player animations for each form
+  setupPlayerAnimations(this);
+  
+  // Set up collision with platforms
+  this.physics.add.collider(player, platforms);
+  
+  // Controls
+  cursors = this.input.keyboard.createCursorKeys();
+  
+  // Memory fracture creation button
+  this.input.keyboard.on('keydown-F', function() {
+    createMemoryFracture(this);
+  }, this);
+  
+  // Phobia shifting controls
+  this.input.keyboard.on('keydown-ONE', function() { changePhobia(this, 'normal'); }, this);
+  this.input.keyboard.on('keydown-TWO', function() { changePhobia(this, 'arachnophobia'); }, this);
+  this.input.keyboard.on('keydown-THREE', function() { changePhobia(this, 'acrophobia'); }, this);
+  this.input.keyboard.on('keydown-FOUR', function() { changePhobia(this, 'claustrophobia'); }, this);
+  this.input.keyboard.on('keydown-FIVE', function() { changePhobia(this, 'nyctophobia'); }, this);
+  
+  // UI setup
+  setupUI(this);
+  
+  // Spawn initial enemies
+  spawnEnemies(this);
+  
+  // Audio setup
+  setupAudio(this);
+  
+  // Create a camera that follows the player
+  this.cameras.main.setBounds(0, 0, 800, 600);
+  this.cameras.main.startFollow(player);
+  
+  // Add text for game instructions
+  this.add.text(20, 20, 'LIMBUS: Use arrow keys to move, F to create memory fracture\nKeys 1-5 to change phobia forms', {
+    fontSize: '16px',
+    fill: '#fff',
+    backgroundColor: '#000',
+    padding: { left: 10, right: 10, top: 5, bottom: 5 }
+  }).setScrollFactor(0);
+}
+
+function update() {
+  // Player movement based on current form
+  movePlayer();
+  
+  // Update enemy behavior
+  updateEnemies();
+  
+  // Update memory fractures
+  updateFractures();
+  
+  // Update dread meter
+  updateDreadMeter();
+  
+  // Environmental effects based on dread level
+  applyEnvironmentalEffects(this);
+  
+  // Audio adjustments based on game state
+  updateAudio();
+}
+
+// Helper functions for game mechanics
+
+function setupPlayerAnimations(scene) {
+  // Normal form animations
+  scene.anims.create({
+    key: 'normal_left',
+    frames: scene.anims.generateFrameNumbers('echo_normal', { start: 0, end: 3 }),
+    frameRate: 10,
+    repeat: -1
+  });
+  
+  scene.anims.create({
+    key: 'normal_right',
+    frames: scene.anims.generateFrameNumbers('echo_normal', { start: 4, end: 7 }),
+    frameRate: 10,
+    repeat: -1
+  });
+  
+  scene.anims.create({
+    key: 'normal_idle',
+    frames: scene.anims.generateFrameNumbers('echo_normal', { start: 8, end: 9 }),
+    frameRate: 2,
+    repeat: -1
+  });
+  
+  // Create animations for other phobia forms
+  // (Similar animation setups for other forms would go here)
+}
+
+function movePlayer() {
+  // Reset velocity
+  player.setVelocityX(0);
+  
+  // Movement behavior based on current phobia
+  switch(player.phobia) {
+    case 'normal':
+      // Standard movement
+      if (cursors.left.isDown) {
+        player.setVelocityX(-160);
+        player.anims.play('normal_left', true);
+      } else if (cursors.right.isDown) {
+        player.setVelocityX(160);
+        player.anims.play('normal_right', true);
+      } else {
+        player.anims.play('normal_idle', true);
+      }
+      
+      if (cursors.up.isDown && player.body.touching.down) {
+        player.setVelocityY(-330);
+      }
+      break;
+      
+    case 'arachnophobia':
+      // Spider form - can crawl on walls and ceiling
+      const speed = 120;
+      
+      if (cursors.left.isDown) {
+        player.setVelocityX(-speed);
+      } else if (cursors.right.isDown) {
+        player.setVelocityX(speed);
+      }
+      
+      if (cursors.up.isDown) {
+        player.setVelocityY(-speed);
+      } else if (cursors.down.isDown) {
+        player.setVelocityY(speed);
+      } else if (!cursors.left.isDown && !cursors.right.isDown) {
+        player.setVelocityY(0);
+      }
+      
+      // Override gravity for this form
+      player.body.setAllowGravity(false);
+      break;
+      
+    case 'acrophobia':
+      // Height-fear form - temporary levitation
+      if (cursors.left.isDown) {
+        player.setVelocityX(-130);
+      } else if (cursors.right.isDown) {
+        player.setVelocityX(130);
+      }
+      
+      if (cursors.up.isDown) {
+        player.setVelocityY(-100); // Slower vertical movement for hovering
+      } else {
+        player.setVelocityY(60); // Slow fall
+      }
+      
+      // Reduced gravity
+      player.body.setGravityY(50);
+      break;
+      
+    case 'claustrophobia':
+      // Compression form - can fit through tight spaces
+      // Smaller hitbox, lower to the ground
+      player.setDisplaySize(24, 24);
+      
+      if (cursors.left.isDown) {
+        player.setVelocityX(-100);
+      } else if (cursors.right.isDown) {
+        player.setVelocityX(100);
+      }
+      
+      if (cursors.up.isDown && player.body.touching.down) {
+        player.setVelocityY(-250); // Lower jump
+      }
+      break;
+      
+    case 'nyctophobia':
+      // Darkness form - partially invisible, not detected by some enemies
+      player.alpha = 0.5; // Semi-transparent
+      
+      if (cursors.left.isDown) {
+        player.setVelocityX(-140);
+      } else if (cursors.right.isDown) {
+        player.setVelocityX(140);
+      }
+      
+      if (cursors.up.isDown && player.body.touching.down) {
+        player.setVelocityY(-330);
+      }
+      break;
+  }
+}
+
+function changePhobia(scene, newPhobia) {
+  // Don't allow form changes during cooldown
+  if (phobiaCooldown) return;
+  
+  // Reset any form-specific properties
+  player.body.setAllowGravity(true);
+  player.body.setGravityY(300);
+  player.setDisplaySize(32, 48);
+  player.alpha = 1;
+  
+  // Apply new phobia form
+  player.phobia = newPhobia;
+  player.setTexture(`echo_${newPhobia}`);
+  
+  // Play transformation sound
+  scene.sound.play('form_change');
+  
+  // Increase dread meter slightly with each transformation
+  dreadMeter += 5;
+  
+  // Set cooldown
+  phobiaCooldown = true;
+  scene.time.delayedCall(2000, function() {
+    phobiaCooldown = false;
+  });
+  
+  // Form-specific setup
+  switch(newPhobia) {
+    case 'arachnophobia':
+      // Spider form can stick to surfaces
+      player.body.setAllowGravity(false);
+      break;
+    case 'acrophobia':
+      // Height-fear form has reduced gravity
+      player.body.setGravityY(50);
+      break;
+    case 'claustrophobia':
+      // Compression form is smaller
+      player.setDisplaySize(24, 24);
+      break;
+    case 'nyctophobia':
+      // Darkness form is semi-invisible
+      player.alpha = 0.5;
+      break;
+  }
+}
+
+function createMemoryFracture(scene) {
+  // Limit the number of fractures that can be open at once
+  if (gameState.fracturesOpen >= 3) {
+    closeFracture(fractures[0], scene); // Close the oldest fracture
+  }
+  
+  // Create a new fracture at player's position
+  const fracture = scene.physics.add.sprite(player.x, player.y, 'memory_fracture');
+  fracture.setScale(0.1);
+  fracture.creationTime = scene.time.now;
+  fracture.active = true;
+  
+  // Grow the fracture
+  scene.tweens.add({
+    targets: fracture,
+    scale: 1,
+    duration: 1000,
+    ease: 'Power2'
+  });
+  
+  // Play fracture sound
+  scene.sound.play('fracture_open');
+  
+  // Add to fractures array
+  fractures.push(fracture);
+  gameState.fracturesOpen++;
+  
+  // Fractures increase dread
+  dreadMeter += 10;
+  
+  // Fractures close automatically after some time
+  scene.time.delayedCall(10000, function() {
+    if (fracture.active) {
+      closeFracture(fracture, scene);
+    }
+  });
+  
+  // Each open fracture has a chance to spawn an enemy
+  if (Math.random() < 0.3) {
+    spawnEnemyFromFracture(scene, fracture);
+  }
+}
+
+function closeFracture(fracture, scene) {
+  // Shrink and remove the fracture
+  scene.tweens.add({
+    targets: fracture,
+    scale: 0,
+    duration: 800,
+    onComplete: function() {
+      const index = fractures.indexOf(fracture);
+      if (index > -1) {
+        fractures.splice(index, 1);
+        gameState.fracturesOpen--;
+        fracture.destroy();
+      }
+    }
+  });
+  
+  fracture.active = false;
+}
+
+function spawnEnemies(scene) {
+  // Create a nurse enemy
+  const nurse = scene.physics.add.sprite(600, 400, 'nurse');
+  nurse.setBounce(0.1);
+  nurse.setCollideWorldBounds(true);
+  nurse.enemyType = 'nurse';
+  nurse.lastSeen = scene.time.now;
+  nurse.seesPlayer = false;
+  nurse.setVelocityX(-30); // Start moving left
+  
+  // Set up collision with platforms
+  scene.physics.add.collider(nurse, platforms);
+  
+  // Collision with player
+  scene.physics.add.overlap(player, nurse, function() {
+    if (player.phobia !== 'nyctophobia') { // Darkness form can avoid detection
+      playerTakeDamage(scene);
+    }
+  });
+  
+  enemies.push(nurse);
+  
+  // Additional enemy spawning logic could go here
+}
+
+function spawnEnemyFromFracture(scene, fracture) {
+  // Create a memory leech enemy from the fracture
+  const leech = scene.physics.add.sprite(fracture.x, fracture.y, 'memory_leech');
+  leech.setBounce(0.2);
+  leech.setCollideWorldBounds(true);
+  leech.enemyType = 'memory_leech';
+  leech.targetFracture = fracture;
+  
+  // Set up collision with platforms
+  scene.physics.add.collider(leech, platforms);
+  
+  // Collision with player
+  scene.physics.add.overlap(player, leech, function() {
+    playerTakeDamage(scene);
+  });
+  
+  enemies.push(leech);
+}
+
+function updateEnemies() {
+  enemies.forEach(enemy => {
+    // Nurse enemy behavior - freezes when watched, moves when not
+    if (enemy.enemyType === 'nurse') {
+      // Check if player is looking at the nurse (facing it and unobstructed view)
+      const playerFacingRight = player.flipX === false;
+      const nurseOnRight = enemy.x > player.x;
+      
+      const isWatched = (playerFacingRight && nurseOnRight) || (!playerFacingRight && !nurseOnRight);
+      
+      if (isWatched && player.phobia !== 'nyctophobia') {
+        // Freeze when watched
+        enemy.setVelocity(0);
+        enemy.anims.pause();
+        enemy.lastSeen = game.getTime();
+      } else {
+        // If not being watched for a while, move unpredictably
+        if (game.getTime() - enemy.lastSeen > 1000) {
+          // Move faster when not being watched for a while
+          if (Math.random() < 0.05) {
+            const direction = Math.random() < 0.5 ? -1 : 1;
+            enemy.setVelocityX(direction * 100);
+          }
+        }
+      }
+    }
+    
+    // Memory leech behavior - seeks out memory fractures
+    else if (enemy.enemyType === 'memory_leech') {
+      if (enemy.targetFracture && enemy.targetFracture.active) {
+        // Move toward target fracture
+        const dx = enemy.targetFracture.x - enemy.x;
+        const dy = enemy.targetFracture.y - enemy.y;
+        const angle = Math.atan2(dy, dx);
+        
+        enemy.setVelocityX(Math.cos(angle) * 50);
+        enemy.setVelocityY(Math.sin(angle) * 50);
+        
+        // Check if reached the fracture
+        if (Phaser.Math.Distance.Between(enemy.x, enemy.y, enemy.targetFracture.x, enemy.targetFracture.y) < 20) {
+          closeFracture(enemy.targetFracture, enemy.scene);
+          enemy.targetFracture = null;
+          
+          // Leech grows after consuming a fracture
+          enemy.setScale(enemy.scale + 0.2);
+          
+          // Find a new target if available
+          if (fractures.length > 0) {
+            enemy.targetFracture = fractures[Math.floor(Math.random() * fractures.length)];
+          }
+        }
+      } else {
+        // If no target fracture, wander or seek player
+        if (Math.random() < 0.02) {
+          enemy.setVelocityX((Math.random() - 0.5) * 100);
+          enemy.setVelocityY((Math.random() - 0.5) * 100);
+        }
+        
+        // Occasionally seek a new fracture
+        if (fractures.length > 0 && Math.random() < 0.1) {
+          enemy.targetFracture = fractures[Math.floor(Math.random() * fractures.length)];
+        }
+      }
+    }
+  });
+}
+
+function updateFractures() {
+  // Update any active effects from memory fractures
+  fractures.forEach(fracture => {
+    // Fractures pulse and grow more unstable over time
+    const age = game.getTime() - fracture.creationTime;
+    const pulseScale = 1 + 0.1 * Math.sin(age / 300);
+    fracture.setScale(pulseScale);
+    
+    // Fractures distort reality around them
+    if (Phaser.Math.Distance.Between(player.x, player.y, fracture.x, fracture.y) < 150) {
+      dreadMeter += 0.05; // Being near fractures slowly increases dread
+    }
+  });
+}
+
+function playerTakeDamage(scene) {
+  // Handle player taking damage
+  if (player.invulnerable) return;
+  
+  gameState.sanity -= 15;
+  dreadMeter += 20;
+  
+  // Flash the player to indicate damage
+  player.setTint(0xff0000);
+  player.invulnerable = true;
+  
+  // Play a damage sound
+  scene.sound.play('heartbeat', { volume: 2 });
+  
+  // Camera shake effect
+  scene.cameras.main.shake(250, 0.01);
+  
+  // Reset after a short invulnerability period
+  scene.time.delayedCall(1000, function() {
+    player.clearTint();
+    player.invulnerable = false;
+  });
+}
+
+function updateDreadMeter() {
+  // Dread decreases slowly over time
+  dreadMeter = Math.max(0, dreadMeter - 0.1);
+  
+  // Cap dread at 100
+  dreadMeter = Math.min(100, dreadMeter);
+  
+  // Update UI
+  if (game.scene.scenes[0].dreadMeterFill) {
+    game.scene.scenes[0].dreadMeterFill.width = (dreadMeter / 100) * 200;
+  }
+}
+
+function applyEnvironmentalEffects(scene) {
+  // At high dread levels, the environment becomes more distorted
+  const distortionLevel = dreadMeter / 100;
+  
+  // Visual distortion - change tint based on dread level
+  const r = Math.floor(255 - distortionLevel * 100);
+  const g = Math.floor(255 - distortionLevel * 200);
+  const b = Math.floor(255 - distortionLevel * 50);
+  scene.cameras.main.setTint(Phaser.Display.Color.GetColor(r, g, b));
+  
+  // Screen pulsing at high dread
+  if (dreadMeter > 70) {
+    const pulseAmount = 0.05 * Math.sin(scene.time.now / 500);
+    scene.cameras.main.setZoom(1 + pulseAmount * (dreadMeter / 100));
+  } else {
+    scene.cameras.main.setZoom(1);
+  }
+  
+  // Random visual/audio glitches at high dread
+  if (dreadMeter > 50 && Math.random() < 0.01) {
+    // Brief flash of a distorted version of the screen
+    scene.cameras.main.flash(100);
+    
+    // Random sounds
+    if (Math.random() < 0.3) {
+      scene.sound.play('whisper', { volume: distortionLevel });
+    }
+  }
+  
+  // Extreme dread triggers hallucinations
+  if (dreadMeter > 90 && Math.random() < 0.005) {
+    triggerHallucination(scene);
+  }
+}
+
+function triggerHallucination(scene) {
+  // Create a brief hallucination effect
+  const hallucination = scene.add.sprite(
+    Phaser.Math.Between(100, 700),
+    Phaser.Math.Between(100, 500),
+    'nurse'
+  );
+  
+  hallucination.setScale(Phaser.Math.FloatBetween(0.5, 3));
+  hallucination.setAlpha(0.7);
+  hallucination.setTint(0xff0000);
+  
+  // Make it fade away
+  scene.tweens.add({
+    targets: hallucination,
+    alpha: 0,
+    duration: Phaser.Math.Between(500, 2000),
+    onComplete: function() {
+      hallucination.destroy();
+    }
+  });
+  
+  // Play a sound
+  scene.sound.play('whisper', { volume: 0.8 });
+  
+  // Camera effect
+  scene.cameras.main.shake(200, 0.005);
+}
+
+function setupUI(scene) {
+  // Dread meter UI
+  const dreadMeterBg = scene.add.rectangle(600, 50, 204, 24, 0x000000);
+  dreadMeterBg.setScrollFactor(0);
+  dreadMeterBg.setStrokeStyle(2, 0x333333);
+  
+  scene.dreadMeterFill = scene.add.rectangle(501, 50, 200, 20, 0x990000);
+  scene.dreadMeterFill.setScrollFactor(0);
+  
+  scene.add.text(500, 30, 'DREAD', {
+    fontSize: '16px',
+    fill: '#ffffff'
+  }).setScrollFactor(0);
+  
+  // Phobia selector UI
+  const phobiaText = scene.add.text(50, 30, 'PHOBIAS (1-5)', {
+    fontSize: '16px',
+    fill: '#ffffff'
+  }).setScrollFactor(0);
+}
+
+function setupAudio(scene) {
+  // Background ambience
+  backgroundMusic = scene.sound.add('background_ambience', {
+    volume: 0.3,
+    loop: true
+  });
+  backgroundMusic.play();
+  
+  // Heartbeat sound
+  heartbeatSound = scene.sound.add('heartbeat', {
+    volume: 0,
+    loop: true
+  });
+  heartbeatSound.play();
+  
+  // Whisper sound (plays randomly)
+  whisperSound = scene.sound.add('whisper', {
+    volume: 0
+  });
+}
+
+function updateAudio() {
+  // Adjust heartbeat volume and tempo based on dread level
+  if (heartbeatSound) {
+    heartbeatSound.setVolume(dreadMeter / 200); // Gets louder with more dread
+    heartbeatSound.setRate(0.8 + (dreadMeter / 100) * 0.7); // Gets faster with more dread
+  }
+  
+  // Ambient background gets more distorted with dread
+  if (backgroundMusic) {
+    const distortion = dreadMeter > 70 ? (dreadMeter - 70) / 30 : 0;
+    backgroundMusic.setDetune(distortion * 300); // Slightly detune at high dread
+  }
+}
