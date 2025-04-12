@@ -1,0 +1,24 @@
+limbus-game/
+├── index.html
+├── game.js
+├── README.md
+└── assets/
+    ├── echo_normal.png
+    ├── echo_spider.png
+    ├── hospital_tileset.png
+    └── sounds/
+        ├── heartbeat.mp3
+        ├── whisper.mp3
+        └── hospital_ambience.mp3
+limbus-game/
+├── index.html
+├── game.js
+├── README.md
+└── assets/
+    ├── echo_normal.png
+    ├── echo_spider.png
+    ├── hospital_tileset.png
+    └── sounds/
+        ├── heartbeat.mp3
+        ├── whisper.mp3
+        └── hospital_ambience.mp3
